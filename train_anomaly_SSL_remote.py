@@ -33,7 +33,7 @@ parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path
 parser.add_argument('--manualSeed', default=0, type=int, help='manual seed')
 parser.add_argument('--gpu', default='3', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
 parser.add_argument('--n-labeled', default=1400, type=int, help='Number of labeled data')
-parser.add_argument('--train_iteration', default=420, type=int, help='Number of iteration per epoch')
+parser.add_argument('--train_iteration', default=200, type=int, help='Number of iteration per epoch')
 parser.add_argument('--out', default='anomaly@1400-timehistory-semisupervised', help='Directory to save the result')
 parser.add_argument('--alpha', default=0.75, type=float, help='hyper-parameter of mixmatch')
 parser.add_argument('--lambda_u', default=75, type=float, help='hyper-parameter of mixmatch')
