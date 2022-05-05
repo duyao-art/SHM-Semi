@@ -1,6 +1,7 @@
 # This is the revised version of MixMatch Pytorch for data anomaly classification, which allow users to conduct MixMatch
 # based Semi-supervised Paradigm on self-collected datasets and tasks.
 
+import wandb
 from __future__ import print_function
 import argparse
 import os
@@ -22,10 +23,11 @@ from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 from tensorboardX import SummaryWriter
 import math
 
+
 # -------------------- Definition of global variables used in the training  process --------------------
 
 parser = argparse.ArgumentParser(description='PyTorch MixMatch Training of Data Anomaly Detection')
-parser.add_argument('--epochs', default=100, type=int, metavar='N', help='number of total epochs to run')
+parser.add_argument('--epochs', default=50, type=int, metavar='N', help='number of total epochs to run')
 parser.add_argument('--start_epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
 parser.add_argument('--batch_size', default=64, type=int, metavar='N', help='train batch size')
 parser.add_argument('--lr', default=0.001, type=float, metavar='LR', help='initial learning rate')
@@ -50,8 +52,8 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 use_cuda = torch.cuda.is_available()
 
 # Path of dataset for training and test
-path_01 = '../Data_anomaly_detection_Semi_MixMatch/dataset/time_history_01_120_100/'
-path_02 = '../Data_anomaly_detection_Semi_MixMatch/dataset/time_history_02_120_100/'
+path_01 = '../data_anomaly_detection/Data_anomaly_detection_Semi_MixMatch/dataset/time_history_01_120_100/'
+path_02 = '../data_anomaly_detection/Data_anomaly_detection_Semi_MixMatch/dataset/time_history_02_120_100/'
 path_01_label = './201201.txt'
 path_02_label = './201202.txt'
 path_02_label_part = './201202fold.txt'
@@ -93,11 +95,8 @@ def main():
     # Model preparation
     print("==> creating WRN-28-2")
 
-    # print("==> creating Res-18")
-
     def create_model(ema=False):
         model = WideResNet()
-        # model = MyNetwork()
         model = model.cuda()
         if ema:
             for param in model.parameters():
@@ -490,36 +489,6 @@ def train_val_split_anomaly(n_labeled_per_class):
 
 
 # -------------------- Definition of Network Model used for training --------------------
-
-# self-constructed network model based on ResNet18
-class MyNetwork(nn.Module):
-
-    def __init__(self, spp_level=1, number_class=args.number_class):
-        super().__init__()
-        self.spp_level = spp_level
-        self.num_grid = 1
-        feature_extractor = models.resnet18(pretrained=True)
-        self.conv1 = nn.Conv2d(1, 3, 7)
-        self.net = nn.Sequential(feature_extractor.conv1, feature_extractor.bn1, feature_extractor.relu
-                                 , feature_extractor.maxpool, feature_extractor.layer1,
-                                 feature_extractor.layer2, feature_extractor.layer3, feature_extractor.layer4)
-        self.spp_layer = SPPLayer(spp_level)
-        self.l1 = nn.Linear(self.num_grid * 512, 256)
-        self.bn = nn.BatchNorm1d(256)
-        self.drop = nn.Dropout(p=0.5)
-        self.l2 = nn.Linear(256, number_class)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.net(x)
-        x = self.spp_layer(x)
-        x = self.l1(x)
-        x = self.bn(x)
-        x = F.relu(x)
-        x = self.drop(x)
-        x = self.l2(x)
-        return x
-
 
 # Spatial Pyramid Pooling Module for random input image size
 class SPPLayer(nn.Module):

@@ -1,6 +1,7 @@
 # This is the revised version of MixMatch Pytorch for data anomaly classification, which allow users to conduct MixMatch
 # based Semi-supervised Paradigm on self-collected datasets and tasks.
 
+import wandb
 from __future__ import print_function
 import argparse
 import os
@@ -16,7 +17,6 @@ import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torchvision.transforms as transforms
 import torch.nn.functional as F
-from torchvision import models as models
 from PIL import Image
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 from tensorboardX import SummaryWriter
@@ -25,7 +25,7 @@ import math
 # -------------------- Definition of global variables used in the training  process --------------------
 
 parser = argparse.ArgumentParser(description='PyTorch MixMatch Training of Data Anomaly Detection')
-parser.add_argument('--epochs', default=100, type=int, metavar='N', help='number of total epochs to run')
+parser.add_argument('--epochs', default=50, type=int, metavar='N', help='number of total epochs to run')
 parser.add_argument('--start_epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
 parser.add_argument('--batch_size', default=128, type=int, metavar='N', help='train batch size')
 parser.add_argument('--lr', default=0.001, type=float, metavar='LR', help='initial learning rate')
@@ -48,6 +48,10 @@ state = {k: v for k, v in args._get_kwargs()}
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 use_cuda = torch.cuda.is_available()
+
+name = 'data_anomaly_semi'
+wandb.init(project='SHM-Semi', entity='du-yao', name=name)
+
 
 # Path of dataset for training and test
 path_01 = '../time_history_01_120_100/'
@@ -93,11 +97,8 @@ def main():
     # Model preparation
     print("==> creating WRN-28-2")
 
-    # print("==> creating Res-18")
-
     def create_model(ema=False):
         model = WideResNet()
-        # model = MyNetwork()
         model = model.cuda()
         if ema:
             for param in model.parameters():
@@ -110,6 +111,7 @@ def main():
     cudnn.benchmark = True
     print('    Total params: %.2fM' % (sum(p.numel() for p in model.parameters()) / 1000000.0))
 
+    # 这个不平衡的loss function可能没有写好，效果并不好
     # train_criterion = SemiLossFocal()
     train_criterion = SemiLoss()
     criterion = nn.CrossEntropyLoss()
@@ -160,6 +162,12 @@ def main():
 
         logger.append([train_loss, train_loss_x, train_loss_u, val_loss, val_acc, test_loss, test_acc])
 
+        # loss
+        wandb.log({'loss_train': train_loss, 'loss_valid': val_loss, 'loss_test': test_loss})
+        # acc
+        wandb.log({'epoch': epoch + 1, 'learning_rate': args.lr, 'acc_train': train_acc, 'acc_val': val_acc,
+                   'acc_test': test_acc})
+
         # save the best model parameter
         is_best = val_acc > best_acc
         best_acc = max(val_acc, best_acc)
@@ -179,8 +187,6 @@ def main():
     print(best_acc)
     print('Mean acc:')
     print(np.mean(test_accs[-20:]))
-
-    test_model(model)
 
 
 # definition of the training function of each epoch
@@ -491,38 +497,6 @@ def train_val_split_anomaly(n_labeled_per_class):
     return train_labeled_idxs, train_unlabeled_idxs
 
 
-# -------------------- Definition of Network Model used for training --------------------
-
-# self-constructed network model based on ResNet18
-class MyNetwork(nn.Module):
-
-    def __init__(self, spp_level=1, number_class=args.number_class):
-        super().__init__()
-        self.spp_level = spp_level
-        self.num_grid = 1
-        feature_extractor = models.resnet18(pretrained=True)
-        self.conv1 = nn.Conv2d(1, 3, 7)
-        self.net = nn.Sequential(feature_extractor.conv1, feature_extractor.bn1, feature_extractor.relu
-                                 , feature_extractor.maxpool, feature_extractor.layer1,
-                                 feature_extractor.layer2, feature_extractor.layer3, feature_extractor.layer4)
-        self.spp_layer = SPPLayer(spp_level)
-        self.l1 = nn.Linear(self.num_grid * 512, 256)
-        self.bn = nn.BatchNorm1d(256)
-        self.drop = nn.Dropout(p=0.5)
-        self.l2 = nn.Linear(256, number_class)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.net(x)
-        x = self.spp_layer(x)
-        x = self.l1(x)
-        x = self.bn(x)
-        x = F.relu(x)
-        x = self.drop(x)
-        x = self.l2(x)
-        return x
-
-
 # Spatial Pyramid Pooling Module for random input image size
 class SPPLayer(nn.Module):
 
@@ -764,148 +738,6 @@ def save_checkpoint(state, is_best, checkpoint=args.out, filename='checkpoint.pt
     torch.save(state, filepath)
     if is_best:
         shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
-
-
-def test_model(model):
-
-    since = time.time()
-    checkpoint = torch.load('./anomaly@1400-timehistory/model_best.pth.tar')
-    model.load_state_dict(checkpoint['state_dict'])
-
-    class_correct = list(0. for i in range(num_classes))
-    class_total = list(0. for i in range(num_classes))
-
-    label_validation = []
-    pred_validation = []
-    score_validation = []
-
-    model.eval()
-
-    running_loss = 0.0
-    running_correct = 0
-
-    with open(probability_all_txt[Phase],'w') as f_prob:
-        with torch.no_grad():
-            for data in Dataloader_image[Phase]:
-
-                imgs, labels = data
-                imgs = imgs.to(device)
-                labels = labels.to(device)
-                outputs = model(imgs)
-                loss = criterion(outputs, labels)
-                _, preds = torch.max(outputs, 1)
-                # print(preds)
-                # 这一步的作用是将一个三维tensor输出转变为二维tensor输出
-                outputs = outputs.view(-1,outputs.size(-1))
-                # dim=1默认按照行方向，将输出结果标准化到（0,1）之间
-                preds_softmax = F.softmax(outputs,dim=1)
-                lines_softmax = preds_softmax.cpu().numpy()
-                for i in range(len(lines_softmax)):
-                    # ' '.join()函数按照前面指定的字符将元素重新组合为一个新的字符串
-                    str_pred = ' '.join([str(x) for x in lines_softmax[i]])
-                    # 将该字符串写入
-                    f_prob.write(str_pred)
-                    f_prob.write('\n')
-
-                array_softmax = preds_softmax.gather(1,labels.view(-1,1)).t()
-                label_validation.extend(labels.cpu().numpy())
-                pred_validation.extend(preds.cpu().numpy())
-                score_validation.extend(array_softmax.cpu().numpy()[0])
-
-                # print(preds)
-                # print(labels.data)
-                list_correct = (preds == labels.data).squeeze()
-                for i in range(len(labels)):
-                    label = labels[i]
-                    class_correct[label] += list_correct[i].item()
-                    class_total[label] += 1
-    f_prob.close()
-
-    for i in range(num_classes):
-        print(class_correct[i])
-        print(class_total[i])
-
-    for i in range(num_classes):
-        print('Accuracy of %5s : %2d %%' % (name_classes[i],100*class_correct[i]/class_total[i]))
-
-    print('Test Accuracy is {:.4f}%'.format(sum(class_correct)/(len(Dataset_image[Phase].data))*100))
-
-    str_label = ' '.join([str(x) for x in label_validation])
-    str_pred = ' '.join([str(x) for x in pred_validation])
-    str_score = ' '.join([str(x) for x in score_validation])
-
-    with open(label_validation_txt[Phase],'w') as f_label:
-        f_label.write(str_label)
-    with open(pred_validation_txt[Phase],'w') as f_pred:
-        f_pred.write(str_pred)
-    with open(score_validation_txt[Phase],'w') as f_score:
-        f_score.write(str_score)
-
-    probability_all_txt = {'former_test': 'probability_all_former.txt', 'test': 'probability_all.txt',
-                           'largetest': 'probability_all_largetest.txt', 'cross': 'probability_all_largetest_cross.txt'}
-    label_validation_txt = {'former_test': 'label_validation_former.txt', 'test': 'label_validation.txt',
-                            'largetest': 'label_validation_largetest.txt',
-                            'cross': 'label_validation_largetest_cross.txt'}
-    pred_validation_txt = {'former_test': 'pred_validation_former.txt', 'test': 'pred_validation.txt',
-                           'largetest': 'pred_validation_largetest.txt', 'cross': 'pred_validation_largetest_cross.txt'}
-    score_validation_txt = {'former_test': 'score_validation_former.txt', 'test': 'score_validation.txt',
-                            'largetest': 'score_validation_largetest.txt',
-                            'cross': 'score_validation_largetest_cross.txt'}
-    datasize = {'former_test': [9120, 7], 'test': [9120, 7], 'largetest': [26448, 7], 'cross': [26448, 7]}
-    phase = ['former_test', 'test', 'largetest', 'cross']
-    # Phase = 'former_test'
-    # Phase = 'test'
-    Phase = 'largetest'
-    # Phase = 'cross'
-
-    label_validation = []
-    f = open(label_validation_txt[Phase], "r")  # 打开文件以便写入
-    lines = f.readlines()
-    for word in lines[0].split():
-        word = word.strip(string.whitespace)
-        label_validation.append(int(word))
-    f.close()  # 关闭文件
-    print(len(label_validation))
-    print(label_validation)
-
-    label_array = np.zeros(datasize[Phase])
-    for i in range((datasize[Phase])[0]):
-        j = label_validation[i]
-        label_array[i, j] = 1
-
-    pred_validation = []
-    f_pred = open(pred_validation_txt[Phase], "r")
-    lines_pred = f_pred.readlines()
-    for word in lines_pred[0].split():
-        word = word.strip(string.whitespace)
-        pred_validation.append(int(word))
-    f_pred.close()
-    print(len(pred_validation))
-
-    score_validation = []
-    f_score = open(score_validation_txt[Phase], "r")
-    lines_score = f_score.readlines()
-    for word in lines_score[0].split():
-        word = word.strip(string.whitespace)
-        score_validation.append(float(word))
-    f_score.close()
-    print(len(score_validation))
-
-    probability_all = np.empty(datasize[Phase])
-    f_prob = open(probability_all_txt[Phase], "r")
-    lines_prob = f_prob.readlines()
-    for i in range((datasize[Phase][0])):
-        word = (lines_prob[i].split())
-        word_ = [float(x) for x in word]
-        probability_all[i, :] = np.array(word_)
-    f_prob.close()
-
-    pred_validation = np.array(pred_validation)
-    label_validation = np.array(label_validation)
-    score_validation = np.array(score_validation)
-
-    print(confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6]))
-    confusion = confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6])
 
 
 # -------------------- Main Function Run --------------------
