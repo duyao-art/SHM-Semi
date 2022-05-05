@@ -31,7 +31,7 @@ parser.add_argument('--batch_size', default=128, type=int, metavar='N', help='tr
 parser.add_argument('--lr', default=0.001, type=float, metavar='LR', help='initial learning rate')
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument('--manualSeed', default=0, type=int, help='manual seed')
-parser.add_argument('--gpu', default='3', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
+parser.add_argument('--gpu', default='0', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
 parser.add_argument('--n-labeled', default=1400, type=int, help='Number of labeled data')
 parser.add_argument('--train_iteration', default=200, type=int, help='Number of iteration per epoch')
 parser.add_argument('--out', default='anomaly@1400-timehistory-semisupervised', help='Directory to save the result')
