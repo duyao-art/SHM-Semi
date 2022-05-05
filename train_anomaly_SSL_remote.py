@@ -1,8 +1,9 @@
 # This is the revised version of MixMatch Pytorch for data anomaly classification, which allow users to conduct MixMatch
 # based Semi-supervised Paradigm on self-collected datasets and tasks.
 
-import wandb
+
 from __future__ import print_function
+import wandb
 import argparse
 import os
 import shutil
