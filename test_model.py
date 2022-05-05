@@ -1,10 +1,8 @@
-# This is the revised version of MixMatch Pytorch for data anomaly classification, which allow users to conduct MixMatch
-# based Semi-supervised Paradigm on self-collected datasets and tasks.
-
 from __future__ import print_function
 import argparse
 import os
 import shutil
+import string
 import time
 import random
 import numpy as np
@@ -13,25 +11,26 @@ import torch.nn as nn
 import torch.nn.parallel
 from torch.utils.data import Dataset, DataLoader
 import torch.backends.cudnn as cudnn
-import torch.optim as optim
 import torchvision.transforms as transforms
 import torch.nn.functional as F
 from torchvision import models as models
 from PIL import Image
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
-from tensorboardX import SummaryWriter
 import math
+from sklearn.metrics import confusion_matrix
+import string
+
 
 # -------------------- Definition of global variables used in the training  process --------------------
 
 parser = argparse.ArgumentParser(description='PyTorch MixMatch Training of Data Anomaly Detection')
 parser.add_argument('--epochs', default=100, type=int, metavar='N', help='number of total epochs to run')
 parser.add_argument('--start_epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
-parser.add_argument('--batch_size', default=128, type=int, metavar='N', help='train batch size')
+parser.add_argument('--batch_size', default=64, type=int, metavar='N', help='train batch size')
 parser.add_argument('--lr', default=0.001, type=float, metavar='LR', help='initial learning rate')
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument('--manualSeed', default=0, type=int, help='manual seed')
-parser.add_argument('--gpu', default='3', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
+parser.add_argument('--gpu', default='0', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
 parser.add_argument('--n-labeled', default=1400, type=int, help='Number of labeled data')
 parser.add_argument('--train_iteration', default=200, type=int, help='Number of iteration per epoch')
 parser.add_argument('--out', default='anomaly@1400-timehistory-semisupervised', help='Directory to save the result')
@@ -50,8 +49,8 @@ os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 use_cuda = torch.cuda.is_available()
 
 # Path of dataset for training and test
-path_01 = '../time_history_01_120_100/'
-path_02 = '../time_history_02_120_100/'
+path_01 = '../Data_anomaly_detection_Semi_MixMatch/dataset/time_history_01_120_100/'
+path_02 = '../Data_anomaly_detection_Semi_MixMatch/dataset/time_history_02_120_100/'
 path_01_label = './201201.txt'
 path_02_label = './201202.txt'
 path_02_label_part = './201202fold.txt'
@@ -110,237 +109,117 @@ def main():
     cudnn.benchmark = True
     print('    Total params: %.2fM' % (sum(p.numel() for p in model.parameters()) / 1000000.0))
 
-    # train_criterion = SemiLossFocal()
-    train_criterion = SemiLoss()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    step_schedule = optim.lr_scheduler.StepLR(step_size=12, gamma=0.9, optimizer=optimizer)
-    ema_optimizer = WeightEMA(model, ema_model, alpha=args.ema_decay)
-    start_epoch = 0
-
-    # Training process record
-    title = 'noisy-data_anomaly_classification-semi-supervised'
-    if args.resume:
-        print('==> Resuming from checkpoint..')
-        assert os.path.isfile(args.resume), 'Error: no checkpoint directory found!'
-        args.out = os.path.dirname(args.resume)
-        checkpoint = torch.load(args.resume)
-        best_acc = checkpoint['best_acc']
-        start_epoch = checkpoint['epoch']
-        model.load_state_dict(checkpoint['state_dict'])
-        ema_model.load_state_dict(checkpoint['ema_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        step_schedule.load_state_dict(checkpoint['step_schedule'])
-        logger = Logger(os.path.join(args.out, 'log.txt'), title=title, resume=True)
-    else:
-        logger = Logger(os.path.join(args.out, 'log.txt'), title=title)
-        logger.set_names(
-            ['Train Loss', 'Train Loss X', 'Train Loss U', 'Valid Loss', 'Valid Acc', 'Test Loss', 'Test Acc'])
-    writer = SummaryWriter(args.out)
-
-    # Start training
-    step = 0
-    test_accs = []
-    for epoch in range(start_epoch, args.epochs):
-        print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, args.lr))
-        train_loss, train_loss_x, train_loss_u = train(labeled_trainloader, unlabeled_trainloader, model, optimizer,
-                                                       ema_optimizer, step_schedule, train_criterion, epoch, use_cuda)
-        _, train_acc = validate(labeled_trainloader, ema_model, criterion, use_cuda, mode='Train State')
-        val_loss, val_acc = validate(val_loader, ema_model, criterion, use_cuda, mode='Valid State')
-        test_loss, test_acc = validate(test_loader, ema_model, criterion, use_cuda, mode='Test State')
-        step = args.train_iteration * (epoch + 1)
-
-        # recording the training index for each epoch
-        writer.add_scalar('losses/train_loss', train_loss, step)
-        writer.add_scalar('losses/valid_loss', val_loss, step)
-        writer.add_scalar('losses/test_loss', test_loss, step)
-        writer.add_scalar('accuracy/train_acc', train_acc, step)
-        writer.add_scalar('accuracy/val_acc', val_acc, step)
-        writer.add_scalar('accuracy/test_acc', test_acc, step)
-
-        logger.append([train_loss, train_loss_x, train_loss_u, val_loss, val_acc, test_loss, test_acc])
-
-        # save the best model parameter
-        is_best = val_acc > best_acc
-        best_acc = max(val_acc, best_acc)
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'ema_state_dict': ema_model.state_dict(),
-            'acc': val_acc,
-            'best_acc': best_acc,
-            'optimizer': optimizer.state_dict(),
-        }, is_best)
-        test_accs.append(test_acc)
-    logger.close()
-    writer.close()
-
-    print('Best acc:')
-    print(best_acc)
-    print('Mean acc:')
-    print(np.mean(test_accs[-20:]))
-
-    test_model(model)
-
-
-# definition of the training function of each epoch
-def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, ema_optimizer, step_schedule, criterion, epoch,
-          use_cuda):
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    losses = AverageMeter()
-    losses_x = AverageMeter()
-    losses_u = AverageMeter()
-    ws = AverageMeter()
-    end = time.time()
-    bar = Bar('Training', max=args.train_iteration)
-
-    labeled_train_iter = iter(labeled_trainloader)
-    unlabeled_train_iter = iter(unlabeled_trainloader)
-
-    model.train()
-    for batch_idx in range(args.train_iteration):
-        try:
-            inputs_x, targets_x = labeled_train_iter.next()
-        except:
-            labeled_train_iter = iter(labeled_trainloader)
-            inputs_x, targets_x = labeled_train_iter.next()
-        try:
-            (inputs_u, inputs_u2), _ = unlabeled_train_iter.next()
-        except:
-            unlabeled_train_iter = iter(unlabeled_trainloader)
-            (inputs_u, inputs_u2), _ = unlabeled_train_iter.next()
-
-        data_time.update(time.time() - end)
-        batch_size = inputs_x.size(0)
-
-        targets_x = torch.zeros(batch_size, 7).scatter_(1, targets_x.view(-1, 1).long(), 1)
-
-        if use_cuda:
-            inputs_x, targets_x = inputs_x.cuda(), targets_x.cuda(non_blocking=True)
-            inputs_u = inputs_u.cuda()
-            inputs_u2 = inputs_u2.cuda()
-
-        # Generating pseudo label for unlabelled training data
-        with torch.no_grad():
-            outputs_u = model(inputs_u)
-            outputs_u2 = model(inputs_u2)
-            p = (torch.softmax(outputs_u, dim=1) + torch.softmax(outputs_u2, dim=1)) / 2
-            pt = p ** (1 / args.T)
-            targets_u = pt / pt.sum(dim=1, keepdim=True)
-            targets_u = targets_u.detach()
-
-        # Combining labelled data and unlabelled with pseudo labels
-        # MixUp as data augmentation to generate new training samples
-        all_inputs = torch.cat([inputs_x, inputs_u, inputs_u2], dim=0)
-        all_targets = torch.cat([targets_x, targets_u, targets_u], dim=0)
-        l = np.random.beta(args.alpha, args.alpha)
-        l = max(l, 1 - l)
-
-        idx = torch.randperm(all_inputs.size(0))
-        input_a, input_b = all_inputs, all_inputs[idx]
-        target_a, target_b = all_targets, all_targets[idx]
-
-        mixed_input = l * input_a + (1 - l) * input_b
-        mixed_target = l * target_a + (1 - l) * target_b
-
-        mixed_input = list(torch.split(mixed_input, batch_size))
-        mixed_input = interleave(mixed_input, batch_size)
-
-        # Obtaining model prediction for new labelled and unlabelled data
-        logits = [model(mixed_input[0])]
-        for input in mixed_input[1:]:
-            logits.append(model(input))
-
-        logits = interleave(logits, batch_size)
-        logits_x = logits[0]
-        logits_u = torch.cat(logits[1:], dim=0)
-
-        # Calculating loss for labelled and unlabelled data
-        Lx, Lu, w = criterion(logits_x, mixed_target[:batch_size], logits_u, mixed_target[batch_size:],
-                              epoch + batch_idx / args.train_iteration)
-        loss = Lx + w * Lu
-        losses.update(loss.item(), inputs_x.size(0))
-        losses_x.update(Lx.item(), inputs_x.size(0))
-        losses_u.update(Lu.item(), inputs_x.size(0))
-        ws.update(w, inputs_x.size(0))
-
-        # Model updating based on the calculated loss
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        ema_optimizer.step()
-
-        # Learning rate adjustment
-        step_size = 550
-        cycle = np.floor(1 + batch_idx / (2 * step_size))
-        x = np.abs(batch_idx / step_size - 2 * cycle + 1)
-        base_lr = 0.001
-        max_lr = 0.001350 - 0.000350 * epoch / 900
-        scale_fn = 1 / pow(2, (cycle - 1))
-        args.lr = base_lr + (max_lr - base_lr) * np.maximum(0, (1 - x)) * scale_fn
-
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        bar.suffix = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s | Loss: {loss:.4f} | Loss_x: {loss_x:.4f}' \
-                     ' | Loss_u: {loss_u:.4f} | W: {w:.4f}'.format(
-                                                                    batch=batch_idx + 1,
-                                                                    size=args.train_iteration,
-                                                                    data=data_time.avg,
-                                                                    bt=batch_time.avg,
-                                                                    loss=losses.avg,
-                                                                    loss_x=losses_x.avg,
-                                                                    loss_u=losses_u.avg,
-                                                                    w=ws.avg,
-                                                                )
-        bar.next()
-    bar.finish()
-    return losses.avg, losses_x.avg, losses_u.avg
-
-
-# definition of the validation function of each epoch
-def validate(valloader, model, criterion, use_cuda, mode):
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    losses = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
-
-    model.eval()
-
-    end = time.time()
-    bar = Bar(f'{mode}', max=len(valloader))
-    with torch.no_grad():
-        for batch_idx, (inputs, targets) in enumerate(valloader):
-            data_time.update(time.time() - end)
-            if use_cuda:
-                inputs, targets = inputs.cuda(), targets.cuda(non_blocking=True)
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            prec1, prec5 = accuracy(outputs, targets, topk=(1, 5))
-            losses.update(loss.item(), inputs.size(0))
-            top1.update(prec1.item(), inputs.size(0))
-            top5.update(prec5.item(), inputs.size(0))
-
-            batch_time.update(time.time() - end)
-            end = time.time()
-            bar.suffix = '({batch}/{size}) Data: {data:.3f}s | Batch: {bt:.3f}s  | Loss: {loss:.4f} | ' \
-                         'top1: {top1: .4f} | top5: {top5: .4f}'.format(
-                                                                        batch=batch_idx + 1,
-                                                                        size=len(valloader),
-                                                                        data=data_time.avg,
-                                                                        bt=batch_time.avg,
-                                                                        loss=losses.avg,
-                                                                        top1=top1.avg,
-                                                                        top5=top5.avg,
-                                                                    )
-            bar.next()
-        bar.finish()
-    return losses.avg, top1.avg
+    test_model(model, test_loader,test_set)
 
 
 # --------------- Definition of self-constructed dataset class for labelled and unlabeled data ---------------
+
+
+def test_model(model, test_loader,test_set):
+
+    since = time.time()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    name_classes = ['normal', 'missing', 'minor', 'outlier', 'square', 'trend', 'drift']
+    checkpoint = torch.load('./anomaly@1400-timehistory-semisupervised/model_best.pth.tar')
+    model.load_state_dict(checkpoint['state_dict'])
+
+    class_correct = list(0. for i in range(args.number_class))
+    class_total = list(0. for i in range(args.number_class))
+
+    label_validation = []
+    pred_validation = []
+    score_validation = []
+
+    model.eval()
+
+    running_loss = 0.0
+    running_correct = 0
+
+    with open('probability_all.txt', 'w') as f_prob:
+        with torch.no_grad():
+            for data in test_loader:
+                imgs, labels = data
+                imgs = imgs.to(device)
+                labels = labels.to(device)
+                outputs = model(imgs)
+                _, preds = torch.max(outputs, 1)
+                outputs = outputs.view(-1,outputs.size(-1))
+                preds_softmax = F.softmax(outputs,dim=1)
+                lines_softmax = preds_softmax.cpu().numpy()
+                for i in range(len(lines_softmax)):
+                    str_pred = ' '.join([str(x) for x in lines_softmax[i]])
+                    f_prob.write(str_pred)
+                    f_prob.write('\n')
+
+                array_softmax = preds_softmax.gather(1,labels.view(-1,1)).t()
+                label_validation.extend(labels.cpu().numpy())
+                pred_validation.extend(preds.cpu().numpy())
+                score_validation.extend(array_softmax.cpu().numpy()[0])
+
+                list_correct = (preds == labels.data).squeeze()
+                for i in range(len(labels)):
+                    label = labels[i]
+                    class_correct[label] += list_correct[i].item()
+                    class_total[label] += 1
+    f_prob.close()
+
+    for i in range(args.number_class):
+        print('Accuracy of %5s : %2d %%' % (name_classes[i],100*class_correct[i]/class_total[i]))
+
+    print('Test Accuracy is {:.4f}%'.format(sum(class_correct)/(len(test_set)*100)))
+
+    str_label = ' '.join([str(x) for x in label_validation])
+    str_pred = ' '.join([str(x) for x in pred_validation])
+    str_score = ' '.join([str(x) for x in score_validation])
+
+    with open('label_validation.txt','w') as f_label:
+        f_label.write(str_label)
+    with open('pred_validation.txt','w') as f_pred:
+        f_pred.write(str_pred)
+    with open('score_validation.txt','w') as f_score:
+        f_score.write(str_score)
+
+    datasize = {'test': [21448, 7]}
+    label_validation = []
+    f = open('label_validation.txt', "r")  # 打开文件以便写入
+    lines = f.readlines()
+    for word in lines[0].split():
+        word = word.strip(string.whitespace)
+        label_validation.append(int(word))
+    f.close()
+
+    pred_validation = []
+    f_pred = open('pred_validation.txt', "r")
+    lines_pred = f_pred.readlines()
+    for word in lines_pred[0].split():
+        word = word.strip(string.whitespace)
+        pred_validation.append(int(word))
+    f_pred.close()
+
+    score_validation = []
+    f_score = open('score_validation.txt', "r")
+    lines_score = f_score.readlines()
+    for word in lines_score[0].split():
+        word = word.strip(string.whitespace)
+        score_validation.append(float(word))
+    f_score.close()
+
+    probability_all = np.empty(datasize['test'])
+    f_prob = open('probability_all.txt', "r")
+    lines_prob = f_prob.readlines()
+    for i in range(datasize['test'][0]):
+        word = (lines_prob[i].split())
+        word_ = [float(x) for x in word]
+        probability_all[i, :] = np.array(word_)
+    f_prob.close()
+
+    pred_validation = np.array(pred_validation)
+    label_validation = np.array(label_validation)
+    score_validation = np.array(score_validation)
+
+    print(confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6]))
+    confusion = confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6])
+
 
 # dataset class for labelled data
 class Mydataset(Dataset):
@@ -470,23 +349,15 @@ def train_val_split_anomaly(n_labeled_per_class):
 
     train_labeled_idxs = []
     train_unlabeled_idxs = []
-    # val_idxs = []
-
-    # idxs = np.where(labels == 0)[0]
-    # np.random.shuffle(idxs)
-    # train_labeled_idxs.extend(idxs[:n_labeled_per_class])
-    # train_unlabeled_idxs.extend(idxs[n_labeled_per_class:-7175])
-    # val_idxs.extend(idxs[-200:])
 
     for i in range(0, 7):
         idxs = np.where(labels == i)[0]
         np.random.shuffle(idxs)
         train_labeled_idxs.extend(idxs[:n_labeled_per_class])
         train_unlabeled_idxs.extend(idxs[n_labeled_per_class:])
-        # val_idxs.extend(idxs[-50:])
+
     np.random.shuffle(train_labeled_idxs)
     np.random.shuffle(train_unlabeled_idxs)
-    # np.random.shuffle(val_idxs)
 
     return train_labeled_idxs, train_unlabeled_idxs
 
@@ -764,148 +635,6 @@ def save_checkpoint(state, is_best, checkpoint=args.out, filename='checkpoint.pt
     torch.save(state, filepath)
     if is_best:
         shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
-
-
-def test_model(model):
-
-    since = time.time()
-    checkpoint = torch.load('./anomaly@1400-timehistory/model_best.pth.tar')
-    model.load_state_dict(checkpoint['state_dict'])
-
-    class_correct = list(0. for i in range(num_classes))
-    class_total = list(0. for i in range(num_classes))
-
-    label_validation = []
-    pred_validation = []
-    score_validation = []
-
-    model.eval()
-
-    running_loss = 0.0
-    running_correct = 0
-
-    with open(probability_all_txt[Phase],'w') as f_prob:
-        with torch.no_grad():
-            for data in Dataloader_image[Phase]:
-
-                imgs, labels = data
-                imgs = imgs.to(device)
-                labels = labels.to(device)
-                outputs = model(imgs)
-                loss = criterion(outputs, labels)
-                _, preds = torch.max(outputs, 1)
-                # print(preds)
-                # 这一步的作用是将一个三维tensor输出转变为二维tensor输出
-                outputs = outputs.view(-1,outputs.size(-1))
-                # dim=1默认按照行方向，将输出结果标准化到（0,1）之间
-                preds_softmax = F.softmax(outputs,dim=1)
-                lines_softmax = preds_softmax.cpu().numpy()
-                for i in range(len(lines_softmax)):
-                    # ' '.join()函数按照前面指定的字符将元素重新组合为一个新的字符串
-                    str_pred = ' '.join([str(x) for x in lines_softmax[i]])
-                    # 将该字符串写入
-                    f_prob.write(str_pred)
-                    f_prob.write('\n')
-
-                array_softmax = preds_softmax.gather(1,labels.view(-1,1)).t()
-                label_validation.extend(labels.cpu().numpy())
-                pred_validation.extend(preds.cpu().numpy())
-                score_validation.extend(array_softmax.cpu().numpy()[0])
-
-                # print(preds)
-                # print(labels.data)
-                list_correct = (preds == labels.data).squeeze()
-                for i in range(len(labels)):
-                    label = labels[i]
-                    class_correct[label] += list_correct[i].item()
-                    class_total[label] += 1
-    f_prob.close()
-
-    for i in range(num_classes):
-        print(class_correct[i])
-        print(class_total[i])
-
-    for i in range(num_classes):
-        print('Accuracy of %5s : %2d %%' % (name_classes[i],100*class_correct[i]/class_total[i]))
-
-    print('Test Accuracy is {:.4f}%'.format(sum(class_correct)/(len(Dataset_image[Phase].data))*100))
-
-    str_label = ' '.join([str(x) for x in label_validation])
-    str_pred = ' '.join([str(x) for x in pred_validation])
-    str_score = ' '.join([str(x) for x in score_validation])
-
-    with open(label_validation_txt[Phase],'w') as f_label:
-        f_label.write(str_label)
-    with open(pred_validation_txt[Phase],'w') as f_pred:
-        f_pred.write(str_pred)
-    with open(score_validation_txt[Phase],'w') as f_score:
-        f_score.write(str_score)
-
-    probability_all_txt = {'former_test': 'probability_all_former.txt', 'test': 'probability_all.txt',
-                           'largetest': 'probability_all_largetest.txt', 'cross': 'probability_all_largetest_cross.txt'}
-    label_validation_txt = {'former_test': 'label_validation_former.txt', 'test': 'label_validation.txt',
-                            'largetest': 'label_validation_largetest.txt',
-                            'cross': 'label_validation_largetest_cross.txt'}
-    pred_validation_txt = {'former_test': 'pred_validation_former.txt', 'test': 'pred_validation.txt',
-                           'largetest': 'pred_validation_largetest.txt', 'cross': 'pred_validation_largetest_cross.txt'}
-    score_validation_txt = {'former_test': 'score_validation_former.txt', 'test': 'score_validation.txt',
-                            'largetest': 'score_validation_largetest.txt',
-                            'cross': 'score_validation_largetest_cross.txt'}
-    datasize = {'former_test': [9120, 7], 'test': [9120, 7], 'largetest': [26448, 7], 'cross': [26448, 7]}
-    phase = ['former_test', 'test', 'largetest', 'cross']
-    # Phase = 'former_test'
-    # Phase = 'test'
-    Phase = 'largetest'
-    # Phase = 'cross'
-
-    label_validation = []
-    f = open(label_validation_txt[Phase], "r")  # 打开文件以便写入
-    lines = f.readlines()
-    for word in lines[0].split():
-        word = word.strip(string.whitespace)
-        label_validation.append(int(word))
-    f.close()  # 关闭文件
-    print(len(label_validation))
-    print(label_validation)
-
-    label_array = np.zeros(datasize[Phase])
-    for i in range((datasize[Phase])[0]):
-        j = label_validation[i]
-        label_array[i, j] = 1
-
-    pred_validation = []
-    f_pred = open(pred_validation_txt[Phase], "r")
-    lines_pred = f_pred.readlines()
-    for word in lines_pred[0].split():
-        word = word.strip(string.whitespace)
-        pred_validation.append(int(word))
-    f_pred.close()
-    print(len(pred_validation))
-
-    score_validation = []
-    f_score = open(score_validation_txt[Phase], "r")
-    lines_score = f_score.readlines()
-    for word in lines_score[0].split():
-        word = word.strip(string.whitespace)
-        score_validation.append(float(word))
-    f_score.close()
-    print(len(score_validation))
-
-    probability_all = np.empty(datasize[Phase])
-    f_prob = open(probability_all_txt[Phase], "r")
-    lines_prob = f_prob.readlines()
-    for i in range((datasize[Phase][0])):
-        word = (lines_prob[i].split())
-        word_ = [float(x) for x in word]
-        probability_all[i, :] = np.array(word_)
-    f_prob.close()
-
-    pred_validation = np.array(pred_validation)
-    label_validation = np.array(label_validation)
-    score_validation = np.array(score_validation)
-
-    print(confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6]))
-    confusion = confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6])
 
 
 # -------------------- Main Function Run --------------------
