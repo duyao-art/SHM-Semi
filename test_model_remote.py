@@ -69,6 +69,7 @@ best_acc = 0
 # definition of the whole training process
 def main():
     torch.cuda.empty_cache()
+    since = time.time()
     global best_acc
     if not os.path.isdir(args.out):
         mkdir_p(args.out)
@@ -104,11 +105,12 @@ def main():
     print('    Total params: %.2fM' % (sum(p.numel() for p in model.parameters()) / 1000000.0))
 
     test_model(model, test_loader,test_set)
+    time_end = time.time() - since
+    print('Total Test Time: {:.0f}m {:.0f}s'.format(time_end // 60, time_end % 60))
 
 
 def test_model(model, test_loader,test_set):
 
-    since = time.time()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     name_classes = ['normal', 'missing', 'minor', 'outlier', 'square', 'trend', 'drift']
     checkpoint = torch.load('./anomaly@1400-timehistory-semisupervised/model_best.pth.tar')

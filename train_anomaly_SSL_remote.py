@@ -73,6 +73,7 @@ best_acc = 0
 # definition of the whole training process
 def main():
     torch.cuda.empty_cache()
+    since = time.time()
     global best_acc
     if not os.path.isdir(args.out):
         mkdir_p(args.out)
@@ -153,6 +154,8 @@ def main():
         test_loss, test_acc = validate(test_loader, ema_model, criterion, use_cuda, mode='Test State')
         step = args.train_iteration * (epoch + 1)
 
+        step_schedule.step()
+
         # recording the training index for each epoch
         writer.add_scalar('losses/train_loss', train_loss, step)
         writer.add_scalar('losses/valid_loss', val_loss, step)
@@ -171,6 +174,9 @@ def main():
 
         # save the best model parameter
         is_best = val_acc > best_acc
+        if is_best:
+            Epoch = epoch + 1
+            Test_acc = test_acc
         best_acc = max(val_acc, best_acc)
         save_checkpoint({
             'epoch': epoch + 1,
@@ -183,9 +189,11 @@ def main():
         test_accs.append(test_acc)
     logger.close()
     writer.close()
+    time_end = time.time() - since
 
-    print('Best acc:')
-    print(best_acc)
+    print('Total Training Time: {:.0f}m {:.0f}s'.format(time_end // 60, time_end % 60))
+    print('Epoch: %d  Best val acc: %f  Test acc: %f' % (Epoch, best_acc, Test_acc))
+    # print(best_acc)
     print('Mean acc:')
     print(np.mean(test_accs[-20:]))
 
@@ -279,13 +287,13 @@ def train(labeled_trainloader, unlabeled_trainloader, model, optimizer, ema_opti
         ema_optimizer.step()
 
         # Learning rate adjustment
-        step_size = 550
-        cycle = np.floor(1 + batch_idx / (2 * step_size))
-        x = np.abs(batch_idx / step_size - 2 * cycle + 1)
-        base_lr = 0.001
-        max_lr = 0.001350 - 0.000350 * epoch / 900
-        scale_fn = 1 / pow(2, (cycle - 1))
-        args.lr = base_lr + (max_lr - base_lr) * np.maximum(0, (1 - x)) * scale_fn
+        # step_size = 550
+        # cycle = np.floor(1 + batch_idx / (2 * step_size))
+        # x = np.abs(batch_idx / step_size - 2 * cycle + 1)
+        # base_lr = 0.001
+        # max_lr = 0.001350 - 0.000350 * epoch / 900
+        # scale_fn = 1 / pow(2, (cycle - 1))
+        # args.lr = base_lr + (max_lr - base_lr) * np.maximum(0, (1 - x)) * scale_fn
 
         batch_time.update(time.time() - end)
         end = time.time()
