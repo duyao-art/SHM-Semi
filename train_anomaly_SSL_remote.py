@@ -28,7 +28,7 @@ import math
 parser = argparse.ArgumentParser(description='PyTorch MixMatch Training of Data Anomaly Detection')
 parser.add_argument('--epochs', default=50, type=int, metavar='N', help='number of total epochs to run')
 parser.add_argument('--start_epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
-parser.add_argument('--batch_size', default=160, type=int, metavar='N', help='train batch size')
+parser.add_argument('--batch_size', default=128, type=int, metavar='N', help='train batch size')
 parser.add_argument('--lr', default=0.001, type=float, metavar='LR', help='initial learning rate')
 parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
 parser.add_argument('--manualSeed', default=0, type=int, help='manual seed')
