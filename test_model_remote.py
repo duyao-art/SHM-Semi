@@ -191,6 +191,7 @@ def test_model(model, test_loader,test_set):
     pred_validation = np.array(pred_validation)
     label_validation = np.array(label_validation)
 
+    print(confusion_matrix(label_validation, pred_validation, labels=[0, 1, 2, 3, 4, 5, 6]))
     print(classification_report(label_validation,pred_validation,labels=[0,1,2,3,4,5,6],
                                 target_names=['normal','missing','minor','outlier','square','trend','drift']))
 
