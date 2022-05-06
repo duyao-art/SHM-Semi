@@ -146,6 +146,7 @@ def main():
     step = 0
     test_accs = []
     for epoch in range(start_epoch, args.epochs):
+
         print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, args.lr))
         train_loss, train_loss_x, train_loss_u = train(labeled_trainloader, unlabeled_trainloader, model, optimizer,
                                                        ema_optimizer, step_schedule, train_criterion, epoch, use_cuda)
@@ -155,6 +156,7 @@ def main():
         step = args.train_iteration * (epoch + 1)
 
         step_schedule.step()
+        args.lr = optimizer.param_groups[-1]['lr']
 
         # recording the training index for each epoch
         writer.add_scalar('losses/train_loss', train_loss, step)
