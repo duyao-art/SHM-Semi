@@ -23,7 +23,7 @@ import string
 from sklearn.metrics import classification_report
 
 
-# -------------------- Definition of global variables used in the training  process --------------------
+# -------------------- Definition of global variables used in the training  process ---------------------
 
 parser = argparse.ArgumentParser(description='PyTorch MixMatch Training of Data Anomaly Detection')
 parser.add_argument('--epochs', default=50, type=int, metavar='N', help='number of total epochs to run')
