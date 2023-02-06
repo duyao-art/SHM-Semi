@@ -138,6 +138,7 @@ def main():
     writer = SummaryWriter(args.out)
 
     # Start training
+    
     step = 0
     test_accs = []
     for epoch in range(start_epoch, args.epochs):
