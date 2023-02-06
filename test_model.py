@@ -163,7 +163,7 @@ def test_model(model, test_loader,test_set):
         f_score.write(str_score)
 
     label_validation = []
-    f = open('result/label_validation.txt', "r")  # 打开文件以便写入
+    f = open('result/label_validation.txt', "r")  
     lines = f.readlines()
     for word in lines[0].split():
         word = word.strip(string.whitespace)
